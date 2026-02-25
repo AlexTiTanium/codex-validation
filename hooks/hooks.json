@@ -1,0 +1,4 @@
+{
+  "description": "Optional Codex review triggers. Empty by default — see README.md for how to enable auto-review hooks.",
+  "hooks": {}
+}

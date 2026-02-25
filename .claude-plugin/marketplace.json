@@ -1,0 +1,19 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "codex-validation",
+  "owner": {
+    "name": "Oleksandr Kucherenko"
+  },
+  "plugins": [
+    {
+      "name": "codex-validation",
+      "version": "0.2.0",
+      "source": "./",
+      "description": "Cross-validate plans and code with OpenAI Codex CLI — adversarial review, debate protocol, and structured feedback",
+      "author": {
+        "name": "Oleksandr Kucherenko"
+      },
+      "category": "development"
+    }
+  ]
+}

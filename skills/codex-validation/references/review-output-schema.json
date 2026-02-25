@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["findings", "verdict", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "confidence", "category", "file", "line", "description", "suggestion"],
+        "additionalProperties": false,
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["HIGH", "MEDIUM", "LOW"],
+            "description": "HIGH: verified by evidence (compile error, test failure, concrete proof). MEDIUM: sound reasoning but not directly verified. LOW: speculative, style-based, or uncertain."
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "correctness",
+              "completeness",
+              "architecture",
+              "risk",
+              "alternative",
+              "type_safety",
+              "error_handling",
+              "performance",
+              "security",
+              "convention"
+            ]
+          },
+          "file": {
+            "type": "string",
+            "description": "File path relevant to the finding, or 'general' for cross-cutting issues"
+          },
+          "line": {
+            "type": "integer",
+            "description": "Line number relevant to the finding, or 0 for cross-cutting issues"
+          },
+          "description": {
+            "type": "string",
+            "description": "Clear description of the issue"
+          },
+          "suggestion": {
+            "type": "string",
+            "description": "Actionable suggestion for how to address it"
+          }
+        }
+      }
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["APPROVE", "APPROVE_WITH_CHANGES", "REQUEST_CHANGES"]
+    },
+    "summary": {
+      "type": "string",
+      "description": "Brief overall assessment"
+    }
+  }
+}
