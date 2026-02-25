@@ -1,1 +1,6 @@
 .claude/codex/
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
