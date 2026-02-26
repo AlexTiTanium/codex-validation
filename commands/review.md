@@ -1,6 +1,6 @@
 ---
 description: Pair code review — Claude and Codex independently review then cross-validate each other's decisions
-argument-hint: [uncommitted|branch <base>|commit <sha>] [--profile <name>] [--persona <name>] [--fix]
+argument-hint: [uncommitted|branch <base>|commit <sha>] [--profile <name>] [--persona <name>] [--fix] [--quick [low|medium|high]]
 allowed-tools: ["Read", "Write", "Edit", "Bash", "Grep", "Glob", "TaskOutput"]
 ---
 
@@ -21,6 +21,15 @@ Parse `$ARGUMENTS`:
 - `--profile <name>` → review profile (security-audit, performance, quick-scan, pre-commit, api-review)
 - `--persona <name>` → reviewer persona (senior-engineer, security-researcher, performance-engineer, junior-mentor, devil-advocate)
 - `--fix` → auto-fix accepted MECHANICAL findings after review
+- `--quick` or `--quick <effort>` → quick mode (see below)
+
+## Resolve Quick Mode
+
+If `--quick` is specified:
+1. **Reasoning effort**: Use the token after `--quick` if it is one of `low`, `medium`, `high`. Otherwise default to `low`. This overrides any profile's reasoning effort.
+2. **Severity filter**: Unless `--profile` was explicitly specified, filter findings to CRITICAL and HIGH only. If a profile IS specified, use the profile's own severity filter.
+3. **Phase reduction**: Skip Step 3 (Cross-Validation). After Step 2, proceed directly to Step 4 (Synthesize).
+4. Tell user: "Quick mode: reasoning=[effort], severity=[filter], skipping cross-validation."
 
 ## Step 1: Assess & Configure
 
@@ -51,6 +60,8 @@ mkdir -p .claude/codex/$SESSION_ID
 cat .claude/codex/$SESSION_ID/prompt-review.md | codex exec --json --sandbox read-only --ephemeral --output-schema /absolute/path/to/review-output-schema.json - | tee .claude/codex/$SESSION_ID/events-review.jsonl
 ```
 
+**Reasoning effort**: If quick mode is active, pass `-c model_reasoning_effort="<quick_effort>"`. Otherwise use the profile's reasoning effort or the default.
+
 Use `run_in_background: true`, timeout 300000. Use absolute path for `--output-schema`: `${CLAUDE_PLUGIN_ROOT}/skills/codex-validation/references/review-output-schema.json`
 
 Tell user: "Both reviewers analyzing independently..."
@@ -65,6 +76,8 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/parse-jsonl.sh .claude/codex/$SESSION_ID/even
 Report: "Independent review done. Claude found [N] issues, Codex found [M] issues."
 
 ## Step 3: Cross-Validation (Parallel)
+
+**If quick mode is active, skip this step entirely and proceed to Step 4.**
 
 Each reviewer validates the other's findings.
 
@@ -82,7 +95,13 @@ Tell user: "Cross-validating each other's findings..."
 
 ## Step 4: Synthesize
 
-Read both cross-validation results. Produce final findings:
+**If quick mode is active (cross-validation was skipped):**
+- Skip "Classify by agreement" below — there are no cross-validation results
+- Deduplicate Claude's and Codex's independent findings only
+- Both found same issue → CONFIRMED. Single reviewer only → INDEPENDENT.
+- Apply severity filter: if quick mode filter is active, drop MEDIUM and LOW findings. Recompute verdict from remaining findings: if none remain, verdict is APPROVE.
+
+**Otherwise:** Read both cross-validation results. Produce final findings:
 
 **Deduplicate:**
 - Exact-match (same file + line + category) → merge, keep highest severity/confidence
@@ -117,6 +136,21 @@ Max 3 fix-verify rounds (circuit breaker). Present GUIDANCE and ARCHITECTURAL fi
 
 ## Step 6: Present Results
 
+If quick mode was active:
+```
+=== Quick Pair Review Results ===
+Mode: Quick (reasoning=[effort], CRITICAL/HIGH only, no cross-validation)
+Scope: [N] files, [mode]
+CONFIRMED (both found):  [N] findings
+INDEPENDENT (single reviewer): [M] findings
+
+Findings by severity: [N] CRITICAL, [M] HIGH
+Fixability: [N] MECHANICAL, [M] GUIDANCE, [K] ARCHITECTURAL
+Verdict: APPROVE | APPROVE_WITH_CHANGES | REQUEST_CHANGES
+Tokens: [X]K input / [Y]K output (1 Codex call)
+```
+
+Otherwise:
 ```
 === Pair Review Results ===
 Scope: [N] files, [mode]

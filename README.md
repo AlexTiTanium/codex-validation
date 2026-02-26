@@ -6,9 +6,9 @@ Claude Code plugin for cross-validating plans and code with OpenAI Codex CLI.
 
 | Command | Description |
 |---------|-------------|
-| `/codex:review [scope] [--profile <name>] [--persona <name>] [--fix]` | Pair review — Claude and Codex independently review, then cross-validate each other |
-| `/codex:validate [path] [--profile <name>]` | Plan validation — Codex reviews your plan before you code |
-| `/codex:debate [scope] [--persona <name>]` | Adversarial debate — back-and-forth with internet research to prove positions |
+| `/codex:review [scope] [--profile <name>] [--persona <name>] [--fix] [--quick [effort]]` | Pair review — Claude and Codex independently review, then cross-validate each other |
+| `/codex:validate [path] [--profile <name>] [--quick [effort]]` | Plan validation — Codex reviews your plan before you code |
+| `/codex:debate [scope] [--persona <name>] [--quick [effort]]` | Adversarial debate — back-and-forth with internet research to prove positions |
 
 **Scope options:** `uncommitted` (default), `branch <base>`, `commit <sha>`, `plan <path>`
 
@@ -22,6 +22,37 @@ Codex independently reviews your implementation plan before you start coding. Ca
 
 ### Debate
 4-phase adversarial debate: independent review → cross-critique → defense → synthesis. Both sides use internet research (docs, RFCs, benchmarks) to back their positions.
+
+## Default Rounds
+
+| Command | Default | Quick (`--quick`) |
+|---------|---------|-------------------|
+| `/codex:review` | 2 calls (review + cross-validation) | 1 call (review only) |
+| `/codex:validate` | 1–2 calls + up to 3 iterations | 1 call, no iterations |
+| `/codex:debate` | 3 calls (review + cross-review + defense) | 1 call (review + synthesis) |
+| `--fix` | +3 max fix-verify rounds | same |
+
+## Quick Mode
+
+Add `--quick` to any command for faster results with fewer Codex calls:
+
+```
+/codex:review --quick                              # 1 call, low reasoning, CRITICAL/HIGH only
+/codex:validate --quick                            # 1 call, no iterations
+/codex:debate --quick                              # 1 call, skip debate rounds
+/codex:review --quick medium                       # specify reasoning effort
+/codex:review --quick --profile security-audit     # quick phases + security focus
+```
+
+| Effect | Default | `--quick` |
+|--------|---------|-----------|
+| Reasoning effort | medium (or config/profile) | `low` (or specified: `low`/`medium`/`high`) |
+| Severity filter | all | CRITICAL + HIGH only* |
+| Review phases | review + cross-validation | review only |
+| Validate iterations | up to 3 | 0 (accept as-is) |
+| Debate phases | 4 (review → cross-review → defense → synthesis) | 2 (review → synthesis) |
+
+\*When `--profile` is explicitly specified, the profile's severity filter is used instead.
 
 ## Review Profiles
 

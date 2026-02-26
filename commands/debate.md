@@ -1,6 +1,6 @@
 ---
 description: Adversarial debate — Claude and Codex argue back and forth, using internet research to prove positions
-argument-hint: [uncommitted|plan <path>|branch <base>] [--persona <name>]
+argument-hint: [uncommitted|plan <path>|branch <base>] [--persona <name>] [--quick [low|medium|high]]
 allowed-tools: ["Read", "Write", "Bash", "Grep", "Glob", "Task", "TaskOutput", "WebSearch", "WebFetch"]
 ---
 
@@ -15,6 +15,15 @@ Parse `$ARGUMENTS`:
 - `plan <path>` → review an implementation plan
 - `branch <base>` → review branch diff against base
 - `--persona <name>` → persona for Codex's prompts
+- `--quick` or `--quick <effort>` → quick mode (see below)
+
+## Resolve Quick Mode
+
+If `--quick` is specified:
+1. **Reasoning effort**: Use the token after `--quick` if it is one of `low`, `medium`, `high`. Otherwise default to `low`. This overrides any profile's reasoning effort.
+2. **Severity filter**: Filter findings to CRITICAL and HIGH only.
+3. **Phase reduction**: Skip Phase 2 (Cross-Review) and Phase 3 (Defense). After Phase 1, proceed directly to Phase 4 (Synthesis).
+4. Tell user: "Quick mode: reasoning=[effort], CRITICAL/HIGH only, 2 phases, 1 Codex call."
 
 ## Setup
 
@@ -25,7 +34,8 @@ mkdir -p .claude/codex/$SESSION_ID
 
 Read the target content. Load policy (`.codex-policy.json` if exists) and persona if specified.
 
-Tell user: "Starting adversarial debate. 4 phases, 3 Codex calls. Expected: 3-5 minutes."
+If quick mode is active, tell user: "Starting quick comparison. 2 phases, 1 Codex call. Expected: 1-2 minutes."
+Otherwise tell user: "Starting adversarial debate. 4 phases, 3 Codex calls. Expected: 3-5 minutes."
 
 ## Phase 1 — Independent Review (Parallel)
 
@@ -37,6 +47,8 @@ Both review independently without seeing each other's work.
 ```bash
 cat .claude/codex/$SESSION_ID/prompt-phase1.md | codex exec --json --sandbox read-only --ephemeral --output-schema /absolute/path/to/review-output-schema.json - | tee .claude/codex/$SESSION_ID/events-phase1.jsonl
 ```
+
+**Reasoning effort**: If quick mode is active, pass `-c model_reasoning_effort="<quick_effort>"`. Otherwise use the default.
 Use `run_in_background: true`, timeout 300000. Absolute path for schema: `${CLAUDE_PLUGIN_ROOT}/skills/codex-validation/references/review-output-schema.json`
 
 Tell user: "Phase 1: Both reviewers analyzing independently..."
@@ -51,6 +63,8 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/parse-jsonl.sh .claude/codex/$SESSION_ID/even
 Report: "Phase 1 done. Claude: [N] issues, Codex: [M] issues."
 
 ## Phase 2 — Cross-Review with Evidence (Parallel)
+
+**If quick mode is active, skip Phase 2 and Phase 3 entirely. Proceed directly to Phase 4.**
 
 Each reviewer critiques the other's findings. **Use internet research to prove or disprove claims.**
 
@@ -73,6 +87,8 @@ Tell user: "Phase 2: Cross-reviewing with evidence..."
 
 ## Phase 3 — Defense Round (Parallel)
 
+**If quick mode is active, this phase is skipped.**
+
 Each reviewer responds to the other's critique. Final chance to defend or concede.
 
 **Claude's defense:** For each disagreement from Codex:
@@ -93,7 +109,13 @@ Tell user: "Phase 3: Final defense round..."
 
 ## Phase 4 — Synthesis (Claude Only)
 
-Read ALL 6 artifacts from phases 1-3.
+**If quick mode is active (Phases 2-3 were skipped):**
+- Read only the 2 Phase 1 artifacts (Claude's review + Codex's review)
+- Skip "Classify by debate outcome" below — there was no debate
+- Deduplicate and compare: Both found same issue → AGREED. Single reviewer only → UNIQUE.
+- Apply severity filter: drop MEDIUM and LOW findings. Recompute verdict from remaining findings: if none remain, verdict is APPROVE.
+
+**Otherwise:** Read ALL 6 artifacts from phases 1-3.
 
 **Deduplicate:** Same as review command — exact-match merge, near-match flag.
 
@@ -114,6 +136,18 @@ Write synthesis to `.claude/codex/$SESSION_ID/synthesis.md` and `meta.json`.
 
 ## Present Results
 
+If quick mode was active:
+```
+=== Quick Comparison Results ===
+Mode: Quick (reasoning=[effort], CRITICAL/HIGH only, no debate rounds)
+Agreed findings:    [N] (both found independently)
+Unique findings:    [M] (single reviewer)
+
+Verdict: APPROVE | APPROVE_WITH_CHANGES | REQUEST_CHANGES
+Tokens: [X]K input / [Y]K output (1 Codex call)
+```
+
+Otherwise:
 ```
 === Debate Results ===
 Agreed findings:    [N] (both converged)

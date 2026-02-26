@@ -238,6 +238,60 @@ Used by `/codex:debate`. Both sides can use internet research to back positions.
 
 **Cost:** 3 Codex calls. Circuit breaker applies per-phase.
 
+## Quick Mode (`--quick`)
+
+Available on all commands. Reduces phases, reasoning effort, and severity scope for faster turnaround.
+
+### Argument Parsing
+
+- `--quick` → reasoning effort = `low`, severity = CRITICAL+HIGH only, phases reduced
+- `--quick medium` → reasoning effort = `medium`, phases reduced
+- `--quick high` → reasoning effort = `high`, phases reduced
+- Valid effort values: `low`, `medium`, `high` (not `xhigh`)
+- If the token after `--quick` is not a valid effort level, treat it as the next argument and default to `low`
+
+### Phase Reduction
+
+| Command | Default Phases | Quick Phases | Skipped |
+|---------|---------------|-------------|---------|
+| `/codex:review` | Independent review + Cross-validation + Synthesis | Independent review + Synthesis | Cross-validation |
+| `/codex:validate` | Codex review + up to 3 iterations | Codex review only (single prompt) | Parallel split + iterations |
+| `/codex:debate` | Independent review + Cross-review + Defense + Synthesis | Independent review + Synthesis | Cross-review, Defense |
+
+### Severity Filter
+
+When quick mode is active and NO `--profile` is explicitly specified:
+- Only include findings with severity CRITICAL or HIGH
+- Drop MEDIUM and LOW before presenting results
+- Recompute verdict after filtering: if no findings remain, verdict is APPROVE
+
+When quick mode is active WITH an explicit `--profile`:
+- Use the profile's own severity filter
+- Quick mode still reduces phases and overrides reasoning effort
+
+### Reasoning Effort Precedence
+
+```
+--quick [effort]   (highest priority)
+  ↓
+Profile reasoning  (from references/profiles/<name>.md)
+  ↓
+Default: "medium"
+```
+
+### Composability
+
+- `--quick --fix` → quick review + auto-fix accepted MECHANICAL findings
+- `--quick --profile security-audit` → quick phases + security criteria + profile's severity filter
+- `--quick --persona devil-advocate` → quick phases + adversarial persona
+- `--quick medium --profile performance --persona performance-engineer` → all combine
+
+### Synthesis Adjustments
+
+- **Review (no cross-validation):** Dedup Claude + Codex findings. Both-found = CONFIRMED. Single = INDEPENDENT.
+- **Validate (no iteration):** Accept Codex findings after Claude's evaluation. No follow-up.
+- **Debate (no cross-review/defense):** Compare Claude + Codex independent findings. Both-found = AGREED. Single = UNIQUE.
+
 ## Review Profiles
 
 Profiles tune *what* to look at. In `references/profiles/`.
