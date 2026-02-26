@@ -13,7 +13,7 @@ description: >-
 
 # Codex Validation — Core Knowledge Base
 
-Use OpenAI Codex CLI (`codex exec`) as an independent review agent to cross-validate implementation plans and code changes. Commands: `/codex:review`, `/codex:validate`, `/codex:debate`, `/codex:status`.
+Use OpenAI Codex CLI (`codex exec`) as an independent review agent to cross-validate implementation plans and code changes. Commands: `/codex:review`, `/codex:validate`, `/codex:debate`.
 
 ## Prerequisites
 
@@ -26,12 +26,10 @@ Use OpenAI Codex CLI (`codex exec`) as an independent review agent to cross-vali
 
 All prompt and output files use `.claude/codex/<session-id>/` in the project root instead of `/tmp/`. This avoids Claude Code permission prompts since the project directory is always allowed.
 
-- **Session isolation:** Each invocation gets a unique subdirectory (`<timestamp>-<pid>`), so parallel runs never clobber each other
-- Auto-created by the wrapper script: `mkdir -p .claude/codex/<session-id>`
+- **Session isolation:** Each invocation gets a unique subdirectory (`<timestamp>-<pid>`)
+- Auto-created: `mkdir -p .claude/codex/<session-id>`
 - Already gitignored (`.claude` is in `.gitignore`)
-- Readable by Codex in `--sandbox read-only` (sandbox allows all project files)
-
-**Session ID handling:** When calling the wrapper script directly, each invocation auto-generates an ID. When writing prompt files manually (e.g., for parallel split), generate a session ID first:
+- Readable by Codex in `--sandbox read-only`
 
 ```bash
 SESSION_ID="$(date +%s)-$$"
@@ -42,57 +40,99 @@ mkdir -p .claude/codex/$SESSION_ID
 
 ## Inline Content Rule (CRITICAL)
 
-**ALWAYS inline the full plan/code content directly in the Codex prompt.** Never tell Codex to "read file X" or "see the plan at path Y" — Codex has issues reliably reading files and may miss critical context or hallucinate file contents.
+**ALWAYS inline the full plan/code content directly in the Codex prompt.** Never tell Codex to "read file X" — Codex has issues reliably reading files.
 
-### Fallback for Large Prompts (over 6000 words)
-
-Write full content to `.claude/codex/prompt-context.md` and tell Codex to read from there — it's inside the project directory and accessible in read-only sandbox mode.
+For prompts over ~6000 words, write to `.claude/codex/prompt-context.md` and tell Codex to read from there.
 
 ## JSONL Streaming
 
-All Codex invocations use `--json` flag for JSONL event streaming. This replaces the previous `-o FILE` pattern and provides visibility into Codex's execution.
+All Codex invocations use `--json` flag for JSONL event streaming.
 
 **Event types:** `thread.started`, `turn.started`, `item.started`, `item.completed`, `turn.completed`, `turn.failed`, `error`
 
 **Item types:** `agent_message`, `reasoning`, `command_execution`, `file_changes`, `mcp_tool_call`, `web_search`
 
-**Extracting results after Codex completes:**
+JSONL events are written to stdout in real-time and are **accessible mid-flight** via `TaskOutput(block=false)` on the background task. This enables live progress monitoring (see Progress Monitoring section).
 
 ```bash
-# Get structured findings (plan validation / exec with --output-schema)
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/parse-jsonl.sh .claude/codex/$SESSION/events.jsonl --output > .claude/codex/$SESSION/findings.json
+# Get structured findings (after completion)
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/parse-jsonl.sh .claude/codex/$SESSION/events.jsonl --output
 
-# Get progress summary (tool calls, token usage)
+# Get progress summary (after completion)
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/parse-jsonl.sh .claude/codex/$SESSION/events.jsonl --progress
 
-# Check for errors
+# Check for errors (after completion)
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/parse-jsonl.sh .claude/codex/$SESSION/events.jsonl --errors
 ```
 
-**Compatibility:** `--json` and `--output-schema` coexist — the schema shapes the final `agent_message` content, while `--json` wraps all events as JSONL.
-
 ## Background Execution (MANDATORY)
 
-ALL Codex Bash commands MUST use `run_in_background: true` on the Bash tool. This prevents the UI from freezing during Codex execution (30-120s) and lets you send progress messages while Codex works. Set timeout to 300000ms (5 minutes).
+ALL Codex Bash commands MUST use `run_in_background: true`. Set timeout to 300000ms (5 minutes).
 
-**Flow:**
+1. Write the prompt file (foreground)
+2. Start Codex with `run_in_background: true` — note the **task ID** returned
+3. Send initial progress message
+4. **Monitor with `TaskOutput`** — poll every ~30s (see Progress Monitoring below)
+5. When completed, extract results
 
-1. Write the prompt file (foreground Bash call)
-2. Start Codex with `run_in_background: true` — you will be notified when it completes
-3. Immediately send a progress message: "Codex validation started. Reviewing [scope]..."
-4. When notified of completion, extract results from JSONL and present
+**For parallel runs:** Launch multiple background Bash calls in a single message. Monitor each task ID independently.
 
-**For parallel runs:** Launch multiple background Bash calls in a single message. You'll be notified as each completes.
+**Shell variable gotcha:** Do NOT use `VAR=x && codex ...` in background mode. Use absolute paths directly.
 
-**Do NOT poll or sleep.** The Bash tool notifies you automatically.
+## Progress Monitoring
 
-**Shell variable gotcha with `run_in_background`:** Do NOT use `VAR=x && codex ...` patterns — the `&&` chain may not execute correctly in background mode. Instead, use absolute paths directly or set variables in a prior foreground Bash call.
+While Codex runs in the background, use `TaskOutput` to show the user what's happening. Default interval is **30 seconds** (adjustable per command).
+
+### How It Works
+
+Codex writes JSONL events to stdout in real-time. `TaskOutput(block=false)` returns accumulated stdout from the background process — including JSONL events written so far. This gives live visibility into Codex's progress.
+
+### Polling Loop
+
+After launching a background Codex task:
+
+```
+1. Call TaskOutput(task_id=<id>, block=false, timeout=30000)
+2. If status is "running":
+   a. Count JSONL events in output (grep for "item.completed")
+   b. Find last activity type (reasoning, web_search, command_execution, agent_message)
+   c. Report to user: "Codex working... [N] events, last: [type], [Xs] elapsed"
+   d. Wait ~30s, repeat from step 1
+3. If status is "completed":
+   a. Extract results as normal
+```
+
+### Progress Message Format
+
+Report concise updates — do NOT dump raw JSONL. Example messages:
+
+- `"Codex working... 5 events, 23s elapsed, last: reasoning"`
+- `"Codex working... 12 events, 48s elapsed, last: web_search (researching docs)"`
+- `"Codex working... 28 events, 1m 15s elapsed, last: command_execution"`
+- `"Codex done. 34 events, 1m 42s. Extracting results..."`
+
+### Extracting Progress from JSONL
+
+To count events and find the last activity from TaskOutput's raw output, scan for `item.completed` entries. Key event types to surface:
+
+| JSONL item type | User-facing label |
+|-----------------|-------------------|
+| `reasoning` | thinking |
+| `web_search` | researching |
+| `command_execution` | running commands |
+| `agent_message` | composing response |
+| `file_changes` | editing files |
+
+### Configuration
+
+- **Default interval:** 30 seconds
+- **Adjustable:** Commands can specify a different interval (e.g., `--poll-interval 15`)
+- **No cap on polls:** Continue until task completes. Token cost per poll is minimal (~1-2K tokens).
+- **Parallel tasks:** When monitoring 2+ tasks, check each in sequence within a single polling round
 
 ## Structured Output
 
-Plan validation and generic exec modes use `--output-schema` for structured JSON output. The schema is at `${CLAUDE_PLUGIN_ROOT}/skills/codex-validation/references/review-output-schema.json`.
-
-**Output format (with confidence field):**
+Use `--output-schema` for structured JSON. Schema at `${CLAUDE_PLUGIN_ROOT}/skills/codex-validation/references/review-output-schema.json`.
 
 ```json
 {
@@ -101,145 +141,172 @@ Plan validation and generic exec modes use `--output-schema` for structured JSON
       "severity": "HIGH",
       "confidence": "HIGH",
       "category": "correctness",
-      "file": "src/game/janken/janken.sequence.ts",
+      "file": "src/example.ts",
       "line": 42,
-      "description": "Missing null check on challenge result",
-      "suggestion": "Add early return if resolveJankenChallenge returns null"
+      "description": "Missing null check on result",
+      "suggestion": "Add early return if result is null"
     }
   ],
   "verdict": "REQUEST_CHANGES",
-  "summary": "Plan has one critical gap in error handling."
+  "summary": "One critical gap in error handling."
 }
 ```
 
 **Availability:** `--output-schema` only works on `codex exec`, NOT on `codex exec review` or `codex exec resume`.
 
-## Confidence-Aware Evaluation
+## Severity & Fixability
 
-Each finding has both `severity` and `confidence`. Use this matrix for triage:
+Definitions in `references/severity-taxonomy.md`:
 
-| Severity | Confidence | Action |
-|----------|------------|--------|
-| HIGH/CRITICAL | HIGH | Auto-accept — concrete evidence exists |
-| HIGH/CRITICAL | LOW | Investigate first — verify before accepting |
-| MEDIUM | HIGH | Accept — sound reasoning verified |
-| MEDIUM | MEDIUM | Accept with minor scrutiny |
-| LOW | any | Present but don't block |
-| any | HIGH (both agents agree in debate) | Definite accept |
+- **Severity:** CRITICAL > HIGH > MEDIUM > LOW
+- **Confidence:** HIGH (verified) > MEDIUM (sound reasoning) > LOW (speculative)
+- **Fixability:** MECHANICAL (auto-fixable), GUIDANCE (needs human), ARCHITECTURAL (needs redesign)
+- **Precedence:** policy > profile > persona > defaults
 
-**Dismiss findings that are:**
-- Generic best-practice advice not specific to the change
-- Based on misunderstanding the codebase architecture
-- Style preferences contradicting project conventions (CLAUDE.md)
-- Already covered by existing tests or linting
+## Policy Engine
 
-## Circuit Breaker
-
-Stop iteration when ANY of these trigger:
-
-1. **Stagnation**: 2+ consecutive iterations with 0 accepted findings → STOP
-   - Report: "Review stalled — Codex keeps finding issues Claude rejects. Presenting disagreements."
-2. **Issue recycling**: Same finding (same file + same description) appears in 2+ iterations → ESCALATE
-   - Report: "Recurring disagreement on [finding]. Presenting both positions for your decision."
-3. **Token budget**: Cumulative tokens across all iterations exceed 100K input tokens → STOP
-   - Report: "Token budget reached ([N]K tokens). Presenting current findings."
-4. **Timeout**: Any single Codex call exceeds 5 minutes → KILL + REPORT
-   - Report: "Codex timed out after 5 minutes. Presenting partial findings from earlier rounds."
-
-**Track state** in `.claude/codex/<session>/meta.json`:
+Optional `.codex-policy.json` at project root. Schema: `references/policy-schema.json`.
 
 ```json
 {
-  "iterations": 2,
-  "total_input_tokens": 48000,
-  "total_output_tokens": 3200,
-  "findings_history": [
-    {"iter": 1, "found": 4, "accepted": 2, "rejected": 2},
-    {"iter": 2, "found": 1, "accepted": 1, "rejected": 0}
-  ],
-  "circuit_breaker": null,
-  "elapsed_seconds": 95
+  "blocking": ["security", "correctness"],
+  "warning": ["convention", "alternative"],
+  "auto_dismiss": { "max_severity": "LOW", "max_confidence": "LOW" },
+  "non_overridable": ["CRITICAL+security", "CRITICAL+correctness"]
 }
 ```
 
-Extract token usage from JSONL events after each Codex call:
-```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/parse-jsonl.sh .claude/codex/$SESSION/events.jsonl --progress
-```
+**Evaluation:** non-overridable check → auto-dismiss → blocking/warning classification → log suppressions to `meta.json`.
 
-## Cross-Review Protocol
+**Safety:** `auto_dismiss.max_severity` cannot be HIGH/CRITICAL. CRITICAL security/correctness can never be dismissed.
 
-After Codex produces findings and Claude evaluates them:
+## Confidence-Aware Triage
 
-1. **Claude writes formal evaluation** to `.claude/codex/<session>/claude-evaluation.md`:
-   - For each finding: ACCEPT with reasoning, or REJECT with evidence
-   - Overall assessment: what Claude agrees with, what it disputes
+Default triage when no policy file exists:
 
-2. **Feed evaluation back to Codex** (via exec with inlined content):
-   ```
-   Here is another reviewer's evaluation of your findings:
-   [claude-evaluation.md content]
+| Severity | Confidence | Action |
+|----------|------------|--------|
+| HIGH/CRITICAL | HIGH | Auto-accept |
+| HIGH/CRITICAL | LOW | Investigate first |
+| MEDIUM | HIGH | Accept |
+| MEDIUM | MEDIUM | Accept with scrutiny |
+| LOW | any | Present but don't block |
+| any | Both agents agree | Definite accept |
 
-   For rejected findings: provide counter-evidence or concede.
-   For accepted findings: confirm the fix approach is correct.
-   Re-assess your verdict considering the other reviewer's perspective.
-   ```
+**Dismiss:** Generic advice, codebase misunderstandings, style preferences contradicting CLAUDE.md, findings covered by tests/linting.
 
-3. **Codex responds** with revised findings (some defended, some conceded)
+## Circuit Breaker
 
-4. **Claude synthesizes**: merge agreed findings, present persistent disagreements to user
+Stop when ANY triggers:
+1. **Stagnation**: 2+ iterations with 0 accepted → STOP
+2. **Recycling**: Same finding in 2+ iterations → ESCALATE to user
+3. **Token budget**: 100K input tokens → STOP
+4. **Timeout**: 5 minutes per Codex call → KILL
+
+Track in `.claude/codex/<session>/meta.json`.
+
+## Pair Review Protocol
+
+Used by `/codex:review`. Both Claude and Codex review independently, then cross-validate each other's decisions.
+
+1. **Independent review** — both analyze without seeing each other's work
+2. **Cross-validation** — each evaluates the other's findings (ACCEPT/REJECT/PARTIAL)
+3. **Synthesis** — merge results by agreement level:
+   - CONFIRMED (both found it) → highest confidence
+   - ACCEPTED (one found, other validated) → high confidence
+   - DISPUTED (disagreement) → present both positions for user
 
 ## Debate Protocol (4-Phase)
 
-Full adversarial review with structured argumentation. Triggered by `/codex:debate`.
+Used by `/codex:debate`. Both sides can use internet research to back positions.
 
 **Phase 1 — Independent Review (parallel)**
-- Claude reviews independently → `.claude/codex/<session>/phase1-claude.md`
-- Codex reviews independently → `.claude/codex/<session>/phase1-codex.json` (via `--json | tee`)
-- Both use confidence ratings
+- Claude → `phase1-claude.md`
+- Codex → `phase1-codex.json`
 
-**Phase 2 — Cross-Review (parallel)**
-- Claude critiques Codex's findings → `.claude/codex/<session>/phase2-claude-on-codex.md`
-- Codex critiques Claude's findings → `.claude/codex/<session>/phase2-codex-on-claude.json`
+**Phase 2 — Cross-Review with Evidence (parallel)**
+- Each critiques the other's findings
+- Use WebSearch/WebFetch (Claude) and web_search (Codex) to find docs, RFCs, benchmarks
+- AGREE / DISAGREE / PARTIALLY_AGREE with cited sources
 
-**Phase 3 — Meta-Review (parallel)**
-- Claude responds to Codex's critique → `.claude/codex/<session>/phase3-claude-meta.md`
-- Codex responds to Claude's critique → `.claude/codex/<session>/phase3-codex-meta.json`
+**Phase 3 — Defense Round (parallel)**
+- Each responds to critique: defend with evidence or concede
+- Final chance to cite internet sources
 
 **Phase 4 — Synthesis (Claude only)**
-- Read ALL 6 artifacts from phases 1-3
-- Produce final verdict with confidence-weighted findings
-- Present disagreements with both positions for user decision
+- Agreed → definitive. Defended → note winning side + evidence. Unresolved → user decides.
 
-**Cost:** 3 Codex calls (phases 1-3). Circuit breaker applies per-phase.
+**Cost:** 3 Codex calls. Circuit breaker applies per-phase.
 
-## Parallel Execution Strategy
+## Review Profiles
 
-For any validation with broad scope, split into 2 parallel Codex calls. This uses more tokens but cuts wall-clock time in half.
+Profiles tune *what* to look at. In `references/profiles/`.
 
-**When to use parallel:** Plans with 5+ steps, reviews touching 3+ files, or scope spanning multiple modules.
-**When to use single:** Focused changes to 1-2 files or plans with < 5 steps.
+**Available:** `security-audit`, `performance`, `quick-scan`, `pre-commit`, `api-review`
 
-**Split dimensions (always these two):**
-1. **Logic & Correctness** — bugs, edge cases, error handling, type safety
-2. **Architecture & Conventions** — patterns, naming, module boundaries, project conventions
+Each contains: Focus Areas, Review Criteria, Reasoning Effort, Severity Filter, Prompt Injection.
+
+**Usage:** `--profile security-audit` on review or validate.
+
+## Custom Personas
+
+Personas tune *how* to look at it. In `references/personas/`.
+
+**Available:** `senior-engineer`, `security-researcher`, `performance-engineer`, `junior-mentor`, `devil-advocate`
+
+Replaces the default role line. Custom personas via `.codex-personas.md` at project root.
+
+**Usage:** `--persona devil-advocate` on review or debate.
+
+**Profiles + personas compose:** `--profile security-audit --persona devil-advocate` = security-focused adversarial review.
+
+## Deduplication
+
+When multiple streams produce findings (pair review, debate phases), deduplicate before presenting.
+
+**Tier 1 — Automatic:** Same file + line + category → merge, keep highest severity/confidence.
+**Tier 2 — Suggested:** Same file + lines within 5 + similar category → "may be related" for user decision.
+
+Cross-cutting findings (file: "general"): only merge if category AND description are nearly identical.
+
+## Auto-Fix (--fix flag)
+
+On `/codex:review --fix`, auto-fix accepted MECHANICAL findings:
+
+1. Create safety branch (`codex-fix-<session>`)
+2. Apply fixes via Edit tool, show diff
+3. Verify with Codex
+4. Rollback on failed verification
+
+Only MECHANICAL findings. Max 3 rounds. `--fix --dry-run` to preview without applying.
+
+## Parallel Execution
+
+Split into 2 parallel Codex calls for broad scope:
+
+**When:** 3+ files or 5+ plan steps.
+**Split:** Logic & Correctness vs Architecture & Conventions.
 
 ## Handling Failures
 
-- **Codex timeout**: Kill process, present partial findings, suggest smaller scope
-- **Authentication error**: Run `codex` interactively once to re-authenticate
-- **Unhelpful feedback**: Try a more specific prompt with concrete file references
-- **Codex disagrees with project conventions**: Override with documented reasoning citing CLAUDE.md
-- **JSONL parse error**: Fall back to reading raw events file, report parsing issue
+- **Timeout**: Present partial findings, suggest smaller scope
+- **Auth error**: Run `codex` interactively to re-authenticate
+- **Unhelpful feedback**: More specific prompt
+- **Convention disagreement**: Override citing CLAUDE.md
+- **JSONL parse error**: Fall back to raw events file
 
 ## Reference Files
 
-- **`references/codex-cli-reference.md`** - Complete CLI flags, flag availability matrix, and configuration details
-- **`references/prompt-patterns.md`** - Prompt templates for plan validation, code review, cross-review, debate, and iteration
-- **`references/review-output-schema.json`** - JSON Schema for structured output (with confidence field)
+- **`references/codex-cli-reference.md`** — CLI flags and configuration
+- **`references/prompt-patterns.md`** — Prompt templates for all commands
+- **`references/review-output-schema.json`** — JSON Schema for structured output
+- **`references/severity-taxonomy.md`** — Severity, confidence, fixability definitions
+- **`references/policy-schema.json`** — Schema for `.codex-policy.json`
+- **`references/profiles/`** — Review profile definitions (5 built-in)
+- **`references/personas/`** — Reviewer persona definitions (5 built-in)
 
 ## Scripts
 
-- **`scripts/codex-validate.sh`** - Wrapper for plan validation, session resume, review, and generic exec (JSONL output)
-- **`scripts/codex-review-diff.sh`** - Wrapper for git-based code review (JSONL output)
-- **`scripts/parse-jsonl.sh`** - Extract structured output, progress summary, or errors from JSONL events
+- **`scripts/codex-validate.sh`** — Plan validation, session resume, review, exec wrapper
+- **`scripts/codex-review-diff.sh`** — Git diff review wrapper
+- **`scripts/parse-jsonl.sh`** — Extract output, progress, or errors from JSONL

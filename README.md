@@ -1,17 +1,74 @@
-# codex-validation
+# codex
 
 Claude Code plugin for cross-validating plans and code with OpenAI Codex CLI.
 
-## Features
+## Commands
 
-- **Plan Validation** (`/codex:validate`) — Review implementation plans before coding
-- **Code Review** (`/codex:review`) — Independent review of uncommitted changes, branches, or commits
-- **Adversarial Debate** (`/codex:debate`) — 4-phase structured debate between Claude and Codex
-- **Session Status** (`/codex:status`) — View last session results and token costs
-- **JSONL Streaming** — Real-time visibility into Codex execution via `--json` event stream
-- **Confidence Ratings** — Findings rated by both severity and confidence for smarter triage
-- **Circuit Breaker** — Auto-stop on stagnation, issue recycling, or token budget
-- **Cross-Review Protocol** — Formal adversarial exchange where each agent critiques the other
+| Command | Description |
+|---------|-------------|
+| `/codex:review [scope] [--profile <name>] [--persona <name>] [--fix]` | Pair review — Claude and Codex independently review, then cross-validate each other |
+| `/codex:validate [path] [--profile <name>]` | Plan validation — Codex reviews your plan before you code |
+| `/codex:debate [scope] [--persona <name>]` | Adversarial debate — back-and-forth with internet research to prove positions |
+
+**Scope options:** `uncommitted` (default), `branch <base>`, `commit <sha>`, `plan <path>`
+
+## How It Works
+
+### Review (Pair)
+Both Claude and Codex review your code independently, then cross-validate each other's findings. Issues found by both reviewers are high-confidence. Disagreements are presented for your decision.
+
+### Validate
+Codex independently reviews your implementation plan before you start coding. Catches missing steps, edge cases, and architectural issues early.
+
+### Debate
+4-phase adversarial debate: independent review → cross-critique → defense → synthesis. Both sides use internet research (docs, RFCs, benchmarks) to back their positions.
+
+## Review Profiles
+
+| Profile | Focus |
+|---------|-------|
+| `security-audit` | OWASP Top 10, injection, auth, crypto |
+| `performance` | N+1 queries, memory, algorithmic complexity |
+| `quick-scan` | CRITICAL/HIGH only, fast turnaround |
+| `pre-commit` | Diff-only, conventions, debug code |
+| `api-review` | Contracts, breaking changes, versioning |
+
+## Personas
+
+| Persona | Mindset |
+|---------|---------|
+| `senior-engineer` | Pragmatic, production-readiness focused |
+| `security-researcher` | Adversarial, attack surface focused |
+| `performance-engineer` | Quantitative, latency/memory focused |
+| `junior-mentor` | Educational, explains principles |
+| `devil-advocate` | Contrarian, challenges every assumption |
+
+Profiles and personas compose: `--profile security-audit --persona devil-advocate`
+
+Custom personas: create `.codex-personas.md` at project root.
+
+## Policy Engine
+
+Optional `.codex-policy.json` at project root:
+
+```json
+{
+  "blocking": ["security", "correctness"],
+  "warning": ["convention", "alternative"],
+  "auto_dismiss": { "max_severity": "LOW", "max_confidence": "LOW" },
+  "non_overridable": ["CRITICAL+security", "CRITICAL+correctness"]
+}
+```
+
+CRITICAL security/correctness findings can never be auto-dismissed.
+
+## Auto-Fix
+
+`/codex:review --fix` auto-fixes accepted MECHANICAL findings:
+- Creates git branch before changes
+- Verifies fixes with Codex
+- Rollback on failed verification
+- `--fix --dry-run` to preview
 
 ## Prerequisites
 
@@ -25,94 +82,31 @@ Claude Code plugin for cross-validating plans and code with OpenAI Codex CLI.
 claude plugins add ~/Projects/codex-validation
 ```
 
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `/codex:review [uncommitted\|branch <base>\|commit <sha>]` | Quick code review |
-| `/codex:validate [path-to-plan]` | Plan validation |
-| `/codex:debate [uncommitted\|plan <path>\|branch <base>]` | Full adversarial 4-phase review |
-| `/codex:status` | Show last session results and costs |
-
 ## Agent
 
 The `codex-reviewer` agent can be spawned by other workflows (feature-dev, pr-review) for independent Codex validation without invoking the full skill.
 
-## How It Works
-
-### Quick Review (`/codex:review`)
-
-1. Assess scope of changes
-2. For 3+ files, split into parallel correctness + architecture reviews
-3. Run Codex in background with JSONL streaming
-4. Extract and evaluate findings with confidence-aware triage
-5. Iterate with cross-review protocol if needed (max 3 rounds)
-
-### Plan Validation (`/codex:validate`)
-
-1. Gather plan content and relevant code
-2. Construct focused prompt with inline content
-3. Run Codex with structured output schema
-4. Evaluate findings, iterate if needed
-5. Present validated plan with accepted changes
-
-### Adversarial Debate (`/codex:debate`)
-
-4-phase structured debate:
-1. **Independent Review** — Claude and Codex review separately (parallel)
-2. **Cross-Review** — Each critiques the other's findings (parallel)
-3. **Meta-Review** — Each defends or concedes (parallel)
-4. **Synthesis** — Claude merges all artifacts into final verdict
-
-### Circuit Breaker
-
-Prevents infinite loops and runaway costs:
-- **Stagnation**: 2+ rounds with 0 accepted findings → stop
-- **Issue Recycling**: Same finding in 2+ rounds → escalate to user
-- **Token Budget**: 100K cumulative input tokens → stop
-- **Timeout**: 5 minutes per Codex call → kill and report
-
-## Configuration
-
-Exchange files go to `.claude/codex/<session-id>/` in the project root (gitignored, no permission prompts).
-
-Codex configuration is at `~/.codex/config.toml`. The plugin respects your model and reasoning effort settings.
-
-## Hooks
-
-Hooks are empty by default. To enable auto-review triggers, edit `hooks/hooks.json`:
-
-```json
-{
-  "hooks": {
-    "Stop": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "If code was modified during this session and no Codex review was performed, suggest running /codex:review to the user.",
-            "timeout": 10
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
 ## File Structure
 
 ```
-.claude-plugin/plugin.json      Plugin manifest
-commands/                        Slash commands (/codex:*)
-agents/codex-reviewer.md        Spawnable review agent
-skills/codex-validation/         Core knowledge base
-  SKILL.md                       Reference documentation
-  references/                    CLI reference, prompt patterns, output schema
-hooks/hooks.json                 Optional auto-review hooks
-scripts/                         Bash wrappers
-  codex-validate.sh              Plan/review/resume/exec wrapper
-  codex-review-diff.sh           Git diff review wrapper
-  parse-jsonl.sh                 JSONL event parser
+.claude-plugin/plugin.json         Plugin manifest
+commands/
+  review.md                         /codex:review (pair review with --profile, --persona, --fix)
+  validate.md                       /codex:validate (plan validation with --profile)
+  debate.md                         /codex:debate (adversarial debate with internet research)
+agents/codex-reviewer.md            Spawnable review agent
+skills/codex-validation/
+  SKILL.md                          Core knowledge base
+  references/
+    codex-cli-reference.md          CLI flags and configuration
+    prompt-patterns.md              Prompt templates
+    review-output-schema.json       JSON Schema for structured output
+    severity-taxonomy.md            Severity/fixability definitions
+    policy-schema.json              Schema for .codex-policy.json
+    profiles/                       Review profiles (5 built-in)
+    personas/                       Reviewer personas (5 built-in)
+scripts/
+  codex-validate.sh                 Plan/review wrapper
+  codex-review-diff.sh              Git diff review wrapper
+  parse-jsonl.sh                    JSONL event parser
 ```

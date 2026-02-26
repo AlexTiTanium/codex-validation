@@ -1,12 +1,12 @@
 ---
-description: Full adversarial 4-phase review with Claude and Codex debating findings
-argument-hint: [uncommitted|plan <path>|branch <base>]
-allowed-tools: ["Read", "Write", "Bash", "Grep", "Glob", "Task"]
+description: Adversarial debate — Claude and Codex argue back and forth, using internet research to prove positions
+argument-hint: [uncommitted|plan <path>|branch <base>] [--persona <name>]
+allowed-tools: ["Read", "Write", "Bash", "Grep", "Glob", "Task", "TaskOutput", "WebSearch", "WebFetch"]
 ---
 
 # Codex Adversarial Debate
 
-Run a full 4-phase adversarial review where Claude and Codex independently review, cross-critique, defend positions, and synthesize findings. Read the codex-validation skill (Debate Protocol section) for full reference.
+Claude and Codex debate code or plans through multiple rounds. Each side can use internet research (docs, RFCs, benchmarks) to back their positions. Read the codex-validation skill for full reference.
 
 ## Determine Scope
 
@@ -14,108 +14,115 @@ Parse `$ARGUMENTS`:
 - `uncommitted` or no args → review uncommitted code changes
 - `plan <path>` → review an implementation plan
 - `branch <base>` → review branch diff against base
+- `--persona <name>` → persona for Codex's prompts
 
 ## Setup
 
-Generate session ID and prepare the exchange directory:
 ```bash
 SESSION_ID="$(date +%s)-$$"
 mkdir -p .claude/codex/$SESSION_ID
 ```
 
-Read the target content (diff, plan, or code files). Prepare the context you'll need for all 4 phases.
+Read the target content. Load policy (`.codex-policy.json` if exists) and persona if specified.
 
-Tell the user: "Starting adversarial debate review. This runs 4 phases with 3 Codex calls. Expected time: 3-5 minutes."
+Tell user: "Starting adversarial debate. 4 phases, 3 Codex calls. Expected: 3-5 minutes."
 
 ## Phase 1 — Independent Review (Parallel)
 
-Both Claude and Codex review independently without seeing each other's work.
+Both review independently without seeing each other's work.
 
-**Claude's review:**
-Analyze the code/plan yourself. Write findings to `.claude/codex/$SESSION_ID/phase1-claude.md` with severity, confidence, file, line, description, suggestion for each issue.
+**Claude's review:** Analyze the code/plan. Write findings to `.claude/codex/$SESSION_ID/phase1-claude.md` with severity, confidence, file, line, description, suggestion.
 
 **Codex's review (background):**
-Write a focused prompt and run Codex:
 ```bash
 cat .claude/codex/$SESSION_ID/prompt-phase1.md | codex exec --json --sandbox read-only --ephemeral --output-schema /absolute/path/to/review-output-schema.json - | tee .claude/codex/$SESSION_ID/events-phase1.jsonl
 ```
-Use `run_in_background: true`, timeout 300000.
+Use `run_in_background: true`, timeout 300000. Absolute path for schema: `${CLAUDE_PLUGIN_ROOT}/skills/codex-validation/references/review-output-schema.json`
 
 Tell user: "Phase 1: Both reviewers analyzing independently..."
 
-When Codex completes, extract findings:
+**Monitor Codex progress** while it runs — use `TaskOutput(task_id=<id>, block=false, timeout=30000)` every ~30s. Report progress: event count, last activity type, elapsed time. See SKILL.md "Progress Monitoring" for format.
+
+Extract findings when done:
 ```bash
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/parse-jsonl.sh .claude/codex/$SESSION_ID/events-phase1.jsonl --output > .claude/codex/$SESSION_ID/phase1-codex.json
 ```
 
-Report: "Phase 1 complete. Claude found [N] issues, Codex found [M] issues."
+Report: "Phase 1 done. Claude: [N] issues, Codex: [M] issues."
 
-## Phase 2 — Cross-Review (Parallel)
+## Phase 2 — Cross-Review with Evidence (Parallel)
 
-Each reviewer critiques the other's findings.
+Each reviewer critiques the other's findings. **Use internet research to prove or disprove claims.**
 
-**Claude critiques Codex:**
-Read Codex's phase 1 findings. For each, write AGREE (with reasoning), DISAGREE (with evidence), or PARTIALLY_AGREE. Save to `.claude/codex/$SESSION_ID/phase2-claude-on-codex.md`.
+**Claude critiques Codex:** Read Codex's findings. For each:
+- **AGREE** — with reasoning and evidence
+- **DISAGREE** — with counter-evidence. Use WebSearch/WebFetch to find docs, RFCs, or benchmarks that support your position
+- **PARTIALLY_AGREE** — explain what's right and wrong
 
-**Codex critiques Claude (background):**
-Inline Claude's phase 1 findings in a prompt:
+Save to `.claude/codex/$SESSION_ID/phase2-claude-on-codex.md`. Include URLs for any internet sources cited.
+
+**Codex critiques Claude (background):** Inline Claude's findings. Tell Codex to use web search to verify claims where possible. The prompt should instruct: "Search the internet for documentation, RFCs, or benchmarks to support your position when disagreeing."
+
+```bash
+cat .claude/codex/$SESSION_ID/prompt-phase2.md | codex exec --json --sandbox read-only --ephemeral - | tee .claude/codex/$SESSION_ID/events-phase2.jsonl
 ```
-Another reviewer found these issues: [phase1-claude.md content]
 
-For each finding:
-- AGREE: if the issue is valid, explain why
-- DISAGREE: if the issue is wrong, provide counter-evidence
-- PARTIALLY_AGREE: if partially valid, explain what's right and wrong
+Tell user: "Phase 2: Cross-reviewing with evidence..."
 
-Also identify any issues the other reviewer missed.
+**Monitor Codex progress** — poll with `TaskOutput(block=false)` every ~30s. Report updates.
+
+## Phase 3 — Defense Round (Parallel)
+
+Each reviewer responds to the other's critique. Final chance to defend or concede.
+
+**Claude's defense:** For each disagreement from Codex:
+- Defend with stronger evidence (use internet research if needed)
+- Or concede if Codex's argument is sound
+
+Save to `.claude/codex/$SESSION_ID/phase3-claude-meta.md`.
+
+**Codex's defense (background):** Inline Claude's critique. Ask Codex to defend or concede, citing sources.
+
+```bash
+cat .claude/codex/$SESSION_ID/prompt-phase3.md | codex exec --json --sandbox read-only --ephemeral - | tee .claude/codex/$SESSION_ID/events-phase3.jsonl
 ```
-Run with `--json --ephemeral`. Save to `.claude/codex/$SESSION_ID/events-phase2.jsonl`.
 
-Tell user: "Phase 2: Cross-reviewing each other's findings..."
+Tell user: "Phase 3: Final defense round..."
 
-## Phase 3 — Meta-Review (Parallel)
-
-Each reviewer responds to the other's critique.
-
-**Claude's meta-review:**
-Read Codex's phase 2 critique. For each disagreement, either defend with stronger evidence or concede. Save to `.claude/codex/$SESSION_ID/phase3-claude-meta.md`.
-
-**Codex's meta-review (background):**
-Inline Claude's phase 2 critique in a prompt. Ask Codex to defend or concede each challenged finding. Run with `--json --ephemeral`. Save to `.claude/codex/$SESSION_ID/events-phase3.jsonl`.
-
-Tell user: "Phase 3: Defending and conceding positions..."
+**Monitor Codex progress** — poll with `TaskOutput(block=false)` every ~30s. Report updates.
 
 ## Phase 4 — Synthesis (Claude Only)
 
-Read ALL 6 artifacts from phases 1-3:
-1. `phase1-claude.md` — Claude's initial findings
-2. `phase1-codex.json` — Codex's initial findings
-3. `phase2-claude-on-codex.md` — Claude's critique of Codex
-4. `phase2-codex-on-claude.json` — Codex's critique of Claude
-5. `phase3-claude-meta.md` — Claude's defense/concessions
-6. `phase3-codex-meta.json` — Codex's defense/concessions
+Read ALL 6 artifacts from phases 1-3.
 
-Produce a final verdict:
+**Deduplicate:** Same as review command — exact-match merge, near-match flag.
 
-**Agreed findings** (both reviewers converge) → HIGH confidence, present as definitive
-**Defended findings** (one reviewer defended successfully) → MEDIUM confidence
-**Unresolved disagreements** → Present both positions for user decision
+**Classify by debate outcome:**
+- **Agreed** (both converge) → HIGH confidence, definitive
+- **Defended** (one side won with evidence) → MEDIUM confidence, note which side and why
+- **Unresolved** → present both positions with sources for user decision
 
-Write synthesis to `.claude/codex/$SESSION_ID/synthesis.md`.
+**Apply policy** if `.codex-policy.json` exists. **Classify fixability** per severity-taxonomy.md.
 
-Write meta.json with cumulative token usage from all JSONL files.
+Write synthesis to `.claude/codex/$SESSION_ID/synthesis.md` and `meta.json`.
 
 ## Circuit Breaker
 
-Monitor across all phases:
-- Total token budget: 100K input tokens across all Codex calls
+- Token budget: 100K input tokens across all Codex calls
 - Per-phase timeout: 5 minutes
 - If any phase fails, present findings from completed phases
 
 ## Present Results
 
-Tell user the final summary:
-- Count of agreed/defended/disputed findings
-- Final verdict with confidence scores
-- Total cost (tokens across 3 Codex calls)
-- Any actions needed from the user (unresolved disputes)
+```
+=== Debate Results ===
+Agreed findings:    [N] (both converged)
+Defended findings:  [M] (one side won with evidence)
+Unresolved:         [K] (needs your decision)
+
+Sources cited: [N] URLs referenced during debate
+Verdict: APPROVE | APPROVE_WITH_CHANGES | REQUEST_CHANGES
+Tokens: [X]K input / [Y]K output (3 Codex calls)
+```
+
+For defended findings, explain which side won and what evidence decided it. For unresolved, show both positions with cited sources.

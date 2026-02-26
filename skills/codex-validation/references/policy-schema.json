@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Codex Review Policy",
+  "description": "Project-level policy for classifying findings as blocking, warning, or auto-dismissed. Place as .codex-policy.json in project root.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "blocking": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["correctness", "completeness", "architecture", "risk", "alternative", "type_safety", "error_handling", "performance", "security", "convention"]
+      },
+      "description": "Finding categories that are blocking (must be fixed before proceeding). Default: [\"security\", \"correctness\"]"
+    },
+    "warning": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["correctness", "completeness", "architecture", "risk", "alternative", "type_safety", "error_handling", "performance", "security", "convention"]
+      },
+      "description": "Finding categories that are warnings (informational only). Default: [\"convention\", \"alternative\"]"
+    },
+    "auto_dismiss": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_severity": {
+          "type": "string",
+          "enum": ["LOW", "MEDIUM"],
+          "description": "Auto-dismiss findings at or below this severity. Cannot be set to HIGH or CRITICAL."
+        },
+        "max_confidence": {
+          "type": "string",
+          "enum": ["LOW", "MEDIUM"],
+          "description": "Auto-dismiss findings at or below this confidence. Cannot be set to HIGH."
+        }
+      },
+      "description": "Rules for automatically dismissing low-priority findings. Both conditions must match for dismissal."
+    },
+    "non_overridable": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(CRITICAL|HIGH)\\+(security|correctness|error_handling|type_safety)$"
+      },
+      "description": "Severity+category combinations that can NEVER be dismissed or downgraded. Default: [\"CRITICAL+security\", \"CRITICAL+correctness\"]. These are enforced even if auto_dismiss would match.",
+      "default": ["CRITICAL+security", "CRITICAL+correctness"]
+    },
+    "severity_threshold": {
+      "type": "string",
+      "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+      "description": "Only report findings at or above this severity. Default: LOW (report everything)."
+    },
+    "category_overrides": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "severity_threshold": {
+            "type": "string",
+            "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+          },
+          "blocking": {
+            "type": "boolean"
+          }
+        }
+      },
+      "description": "Per-category overrides. Example: { \"performance\": { \"severity_threshold\": \"HIGH\" } }"
+    }
+  }
+}

@@ -6,9 +6,9 @@
   "plugins": [
     {
       "name": "codex",
-      "version": "0.2.0",
+      "version": "0.4.0",
       "source": "./",
-      "description": "Cross-validate plans and code with OpenAI Codex CLI — adversarial review, debate protocol, and structured feedback",
+      "description": "Cross-validate plans and code with OpenAI Codex CLI — pair review, plan validation, and adversarial debate with internet research",
       "author": {
         "name": "Oleksandr Kucherenko"
       },

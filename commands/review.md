@@ -1,90 +1,133 @@
 ---
-description: Quick Codex review of uncommitted changes or branch diff
-argument-hint: [uncommitted|branch <base>|commit <sha>]
-allowed-tools: ["Read", "Write", "Bash", "Grep", "Glob"]
+description: Pair code review — Claude and Codex independently review then cross-validate each other's decisions
+argument-hint: [uncommitted|branch <base>|commit <sha>] [--profile <name>] [--persona <name>] [--fix]
+allowed-tools: ["Read", "Write", "Edit", "Bash", "Grep", "Glob", "TaskOutput"]
 ---
 
-# Codex Code Review
+# Codex Pair Review
 
-Run an independent code review using OpenAI Codex CLI. Read the codex-validation skill for full reference.
+Claude and Codex independently review code, then validate each other's findings. This pair approach catches more real issues than either reviewer alone.
+
+Read the codex-validation skill for full reference.
 
 ## Determine Scope
 
-Parse `$ARGUMENTS` to determine review mode:
+Parse `$ARGUMENTS`:
 - No args or `uncommitted` → review uncommitted changes
 - `branch <base>` → review changes against base branch
 - `commit <sha>` → review specific commit
 
-## Step 1: Assess Changes
+**Optional flags:**
+- `--profile <name>` → review profile (security-audit, performance, quick-scan, pre-commit, api-review)
+- `--persona <name>` → reviewer persona (senior-engineer, security-researcher, performance-engineer, junior-mentor, devil-advocate)
+- `--fix` → auto-fix accepted MECHANICAL findings after review
 
-Run `git diff --stat` (or `git diff --stat <base>...HEAD` for branch) to determine the scope.
+## Step 1: Assess & Configure
 
-Tell the user: "Preparing Codex code review of [N] changed files..."
+Run `git diff --stat` (or `git diff --stat <base>...HEAD` for branch) to determine scope.
 
-## Step 2: Prepare Review
+**Load configuration layers (precedence: policy > profile > persona > defaults):**
+1. **Policy**: Read `.codex-policy.json` from project root (if exists)
+2. **Profile**: If `--profile`, read from `references/profiles/<name>.md`
+3. **Persona**: If `--persona`, read from `references/personas/<name>.md` or `.codex-personas.md`
 
-Read the changed files yourself. If the scope touches 3+ files, use **parallel split** (two focused reviews: correctness vs architecture).
+Tell user: "Pair review of [N] files. Config: [profile/persona/policy if active]"
 
-Generate a session ID:
+## Step 2: Independent Reviews (Parallel)
+
+Both reviewers analyze independently without seeing each other's work.
+
+Generate session:
 ```bash
 SESSION_ID="$(date +%s)-$$"
 mkdir -p .claude/codex/$SESSION_ID
 ```
 
-For parallel split, write two prompt files following `references/prompt-patterns.md` templates — one focused on correctness, one on architecture. Inline all relevant code and CLAUDE.md conventions.
+**Claude's review:** Analyze the code yourself. Write findings to `.claude/codex/$SESSION_ID/claude-review.md` with severity, confidence, category, file, line, description, suggestion.
 
-For single review (< 3 files), write one prompt file.
+**Codex's review (background):** Build prompt following `references/prompt-patterns.md`. Inject profile focus areas and persona role if active. Inline all code and CLAUDE.md conventions.
 
-## Step 3: Run Codex
-
-Tell the user: "Running Codex review now. Prompt is ~[N] words..."
-
-**All Codex calls use `run_in_background: true` with timeout 300000.**
-
-For parallel split (two calls in one message):
 ```bash
-cat .claude/codex/$SESSION_ID/prompt-correctness.md | codex exec --json --sandbox read-only --ephemeral --output-schema /absolute/path/to/review-output-schema.json - | tee .claude/codex/$SESSION_ID/events-correctness.jsonl
-```
-```bash
-cat .claude/codex/$SESSION_ID/prompt-architecture.md | codex exec --json --sandbox read-only --ephemeral --output-schema /absolute/path/to/review-output-schema.json - | tee .claude/codex/$SESSION_ID/events-architecture.jsonl
+cat .claude/codex/$SESSION_ID/prompt-review.md | codex exec --json --sandbox read-only --ephemeral --output-schema /absolute/path/to/review-output-schema.json - | tee .claude/codex/$SESSION_ID/events-review.jsonl
 ```
 
-Use absolute path for `--output-schema`: `${CLAUDE_PLUGIN_ROOT}/skills/codex-validation/references/review-output-schema.json`
+Use `run_in_background: true`, timeout 300000. Use absolute path for `--output-schema`: `${CLAUDE_PLUGIN_ROOT}/skills/codex-validation/references/review-output-schema.json`
 
-Immediately tell the user: "Codex review started. Analyzing [N] files..."
+Tell user: "Both reviewers analyzing independently..."
 
-## Step 4: Read and Evaluate
+**Monitor Codex progress** while it runs — use `TaskOutput(task_id=<id>, block=false, timeout=30000)` every ~30s. Report progress: event count, last activity type, elapsed time. See SKILL.md "Progress Monitoring" for format.
 
-When notified of completion, extract results:
+When Codex completes, extract:
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/parse-jsonl.sh .claude/codex/$SESSION_ID/events-correctness.jsonl --output
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/parse-jsonl.sh .claude/codex/$SESSION_ID/events-correctness.jsonl --progress
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/parse-jsonl.sh .claude/codex/$SESSION_ID/events-review.jsonl --output > .claude/codex/$SESSION_ID/codex-review.json
 ```
 
-Report to user immediately: total findings, severity breakdown, verdict.
+Report: "Independent review done. Claude found [N] issues, Codex found [M] issues."
 
-Evaluate each finding using the **confidence-aware triage** matrix from the skill:
-- Check accuracy, relevance, specificity, actionability
-- HIGH severity + HIGH confidence → auto-accept
-- HIGH severity + LOW confidence → investigate first
+## Step 3: Cross-Validation (Parallel)
 
-Tell user: "Accepting [N] findings, rejecting [M]. Here's the breakdown: [details]"
+Each reviewer validates the other's findings.
 
-## Step 5: Iterate (if needed)
+**Claude validates Codex:** Read Codex's findings. For each: ACCEPT (with evidence), REJECT (with reasoning), or PARTIAL. Save to `.claude/codex/$SESSION_ID/claude-validates-codex.md`.
 
-If Codex returned REQUEST_CHANGES and valid findings were accepted:
+**Codex validates Claude (background):** Inline Claude's findings in a prompt. Ask Codex to evaluate each finding with AGREE/DISAGREE/PARTIALLY_AGREE and provide evidence. Run with `--json --ephemeral`.
 
-1. Make code corrections for accepted findings
-2. Write formal evaluation to `.claude/codex/$SESSION_ID/claude-evaluation.md`
-3. Resume or re-run with cross-review protocol (see skill)
-4. **Circuit breaker**: max 3 iterations, stop on stagnation or token budget
+```bash
+cat .claude/codex/$SESSION_ID/prompt-cross-validate.md | codex exec --json --sandbox read-only --ephemeral - | tee .claude/codex/$SESSION_ID/events-cross-validate.jsonl
+```
 
-Track iteration state in `.claude/codex/$SESSION_ID/meta.json`.
+Tell user: "Cross-validating each other's findings..."
+
+**Monitor Codex progress** — poll with `TaskOutput(block=false)` every ~30s. Report updates.
+
+## Step 4: Synthesize
+
+Read both cross-validation results. Produce final findings:
+
+**Deduplicate:**
+- Exact-match (same file + line + category) → merge, keep highest severity/confidence
+- Near-match (same file, lines within 5, similar category) → flag as "may be related"
+
+**Classify by agreement:**
+- **Both found it** → CONFIRMED (highest confidence)
+- **One found, other validated** → ACCEPTED
+- **One found, other rejected** → present both positions for user decision
+
+**Apply policy** (if `.codex-policy.json` exists):
+- Non-overridable findings → always blocking
+- Auto-dismiss rules → apply only to unconfirmed findings
+- Log suppressions in `meta.json`
+
+**Classify fixability** per `references/severity-taxonomy.md`:
+- MECHANICAL (auto-fixable), GUIDANCE (needs human), ARCHITECTURAL (needs redesign)
+
+Write synthesis to `.claude/codex/$SESSION_ID/synthesis.md` and `meta.json`.
+
+## Step 5: Auto-Fix (if `--fix`)
+
+If `--fix` was specified and there are accepted MECHANICAL findings:
+
+1. Create safety branch: `git checkout -b codex-fix-$SESSION_ID`
+2. Apply each MECHANICAL fix using Edit tool, show diff for each
+3. Verify with Codex (`codex exec --json --sandbox read-only --ephemeral`)
+4. If verification passes → done. If fails → rollback via `git checkout`
+5. `--dry-run` variant: use `--fix --dry-run` to preview fixes without applying
+
+Max 3 fix-verify rounds (circuit breaker). Present GUIDANCE and ARCHITECTURAL findings as recommendations only.
 
 ## Step 6: Present Results
 
-Present final summary:
-- Findings accepted and changes made
-- Findings rejected with reasoning
-- Any remaining disagreements for user decision
-- Token usage and iteration count
+```
+=== Pair Review Results ===
+Scope: [N] files, [mode]
+CONFIRMED (both found):  [N] findings
+ACCEPTED (cross-validated): [M] findings
+DISPUTED (disagreement): [K] findings — needs your decision
+
+Findings by severity: [N] CRITICAL, [M] HIGH, [K] MEDIUM, [J] LOW
+Fixability: [N] MECHANICAL, [M] GUIDANCE, [K] ARCHITECTURAL
+Verdict: APPROVE | APPROVE_WITH_CHANGES | REQUEST_CHANGES
+Tokens: [X]K input / [Y]K output
+```
+
+List all findings grouped by confidence level. For disputed findings, show both positions.

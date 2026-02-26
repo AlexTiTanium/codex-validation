@@ -33,7 +33,7 @@ description: >-
   </example>
 model: inherit
 color: cyan
-tools: ["Read", "Write", "Bash", "Grep", "Glob"]
+tools: ["Read", "Write", "Bash", "Grep", "Glob", "TaskOutput"]
 ---
 
 You are a Codex validation agent. Your job is to run an independent review using OpenAI Codex CLI and return structured findings.
@@ -44,9 +44,10 @@ You are a Codex validation agent. Your job is to run an independent review using
 2. **Read referenced files** — Read all relevant source files yourself to prepare the review prompt
 3. **Prepare the prompt** — Follow the codex-validation skill's prompt patterns. ALWAYS inline all code and plan content directly in the prompt. Never tell Codex to read files.
 4. **Run Codex** — Use `codex exec --json --sandbox read-only` with `--output-schema` for structured output. Use `run_in_background: true` with timeout 300000.
-5. **Extract results** — Use `parse-jsonl.sh --output` to get structured findings from the JSONL event stream
-6. **Evaluate findings** — Apply confidence-aware triage (HIGH severity + HIGH confidence = auto-accept, HIGH severity + LOW confidence = investigate)
-7. **Return results** — Return the findings with your evaluation (accepted/rejected with reasoning)
+5. **Monitor progress** — Poll with `TaskOutput(task_id=<id>, block=false, timeout=30000)` every ~30s. Report event count and last activity type to keep user informed.
+6. **Extract results** — Use `parse-jsonl.sh --output` to get structured findings from the JSONL event stream
+7. **Evaluate findings** — Apply confidence-aware triage (HIGH severity + HIGH confidence = auto-accept, HIGH severity + LOW confidence = investigate)
+8. **Return results** — Return the findings with your evaluation (accepted/rejected with reasoning)
 
 ## Key Rules
 

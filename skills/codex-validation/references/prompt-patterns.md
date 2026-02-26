@@ -6,14 +6,28 @@
 2. **Provide full context** - Codex has no prior conversation context. Include everything it needs in the prompt itself
 3. **Be specific about what to validate** - Vague prompts produce vague feedback
 4. **Request structured output** - Ask for categorized findings with severity and confidence levels
-5. **Set the role** - Frame Codex as an independent reviewer, not a collaborator
+5. **Set the role** - Frame Codex as an independent reviewer, not a collaborator. If a persona is active, use the persona role text instead of the default
+
+## Profile & Persona Integration
+
+When constructing any prompt template:
+
+1. **Persona injection** (if `--persona` is active): Replace the first line ("You are an independent technical reviewer") with the persona's role description from `references/personas/<name>.md`
+2. **Profile injection** (if `--profile` is active): Replace the "Review Criteria" and "Focus Areas" sections with the profile's specific content from `references/profiles/<name>.md`. Also inject the profile's "Prompt Injection" text after the role line.
+3. **Combined**: If both are active, use the persona's role line AND the profile's focus areas/criteria. The profile's "Prompt Injection" text is appended after the persona role description.
+
+**Placeholder reference:**
+- `{persona_role}` — defaults to "You are an independent technical reviewer." Override with persona file content.
+- `{profile_focus_areas}` — defaults to the standard review criteria. Override with profile's Focus Areas section.
+- `{profile_criteria}` — defaults to the standard criteria list. Override with profile's Review Criteria section.
+- `{profile_severity_filter}` — defaults to "Report all findings." Override with profile's Severity Filter.
 
 ## Plan Validation Prompt Template
 
 **Note:** Replace all `{placeholders}` with actual content. NEVER replace a placeholder with a file path — always inline the real content.
 
 ```
-You are an independent technical reviewer. Review the following implementation plan for a feature in this codebase.
+{persona_role}. Review the following implementation plan for a feature in this codebase.
 
 ## Codebase Context
 {Brief description of the project, stack, and relevant architecture. Inline key conventions from CLAUDE.md here — do NOT tell Codex to read CLAUDE.md}
@@ -33,7 +47,8 @@ You are an independent technical reviewer. Review the following implementation p
 \```
 
 ## Review Criteria
-Evaluate this plan for:
+{profile_criteria}
+Default (when no profile is active):
 1. **Correctness** - Will this plan actually achieve the requirements?
 2. **Completeness** - Are there missing steps, edge cases, or files that need changes?
 3. **Architecture** - Does this fit the existing codebase patterns and conventions?
@@ -76,13 +91,14 @@ End with an overall assessment: APPROVE / APPROVE_WITH_CHANGES / REQUEST_CHANGES
 ## Code Review Prompt Template
 
 ```
-You are an independent code reviewer. Review the changes in this repository for quality, correctness, and adherence to project conventions.
+{persona_role}. Review the changes in this repository for quality, correctness, and adherence to project conventions.
 
 ## Context
 {What these changes are for, the feature/bug being addressed}
 
 ## Focus Areas
-{Specific concerns to look for}
+{profile_focus_areas}
+Default (when no profile is active): {Specific concerns to look for}
 
 ## Review Criteria
 1. Logic errors and bugs
@@ -305,3 +321,29 @@ Dismiss findings that are:
 - Based on misunderstanding the codebase architecture
 - Style preferences that contradict project conventions
 - Duplicate findings already covered by existing tests/linting
+
+## Fix Verification Prompt Template
+
+Used by `/codex:review --fix` to verify auto-applied fixes.
+
+```
+{persona_role}. Verify the following code fixes that were applied to address review findings.
+
+## Original Findings
+{List of findings that were fixed, with severity/confidence/description}
+
+## Applied Fixes (git diff)
+{Full git diff of the applied changes}
+
+## Verification Criteria
+For each fix:
+1. Does it correctly address the original finding?
+2. Does it introduce any new issues (bugs, type errors, security holes)?
+3. Is the fix complete or does it leave gaps?
+
+Rate each fix: CORRECT, INCORRECT, or INCOMPLETE.
+For INCORRECT/INCOMPLETE: explain what's wrong and suggest the proper fix.
+
+Overall verdict: APPROVE or REQUEST_CHANGES.
+```
+
