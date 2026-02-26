@@ -1,4 +1,4 @@
-# codex
+# codex-validation
 
 Claude Code plugin for cross-validating plans and code with OpenAI Codex CLI.
 
@@ -78,8 +78,16 @@ CRITICAL security/correctness findings can never be auto-dismissed.
 
 ## Installation
 
+From GitHub:
+
 ```bash
-claude plugins add ~/Projects/codex-validation
+claude plugin add github:AlexTiTanium/codex-validation
+```
+
+Or from a local clone:
+
+```bash
+claude plugin add ./codex-validation
 ```
 
 ## Agent
