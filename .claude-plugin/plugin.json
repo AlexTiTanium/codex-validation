@@ -6,6 +6,5 @@
     "name": "Oleksandr Kucherenko"
   },
   "keywords": ["codex", "review", "validation", "adversarial", "cross-validation"],
-  "commands": ["./commands"],
-  "hooks": "./hooks/hooks.json"
+  "commands": ["./commands"]
 }
