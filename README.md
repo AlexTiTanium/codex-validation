@@ -11,6 +11,7 @@ Claude Code plugin for cross-validating plans and code with OpenAI Codex CLI.
 | `/codex:debate [scope] [--persona <name>] [--quick [effort]]` | Adversarial debate — back-and-forth with internet research to prove positions |
 
 **Scope options:** `uncommitted` (default), `branch <base>`, `commit <sha>`, `plan <path>`
+**Flags:** `--profile <name>`, `--persona <name>`, `--quick [low|medium|high]`, `--fix`
 
 ## How It Works
 
@@ -56,6 +57,8 @@ Add `--quick` to any command for faster results with fewer Codex calls:
 
 ## Review Profiles
 
+A **profile** controls *what* to look for — it sets focus areas, review criteria, severity filters, and reasoning effort. One profile per command.
+
 | Profile | Focus |
 |---------|-------|
 | `security-audit` | OWASP Top 10, injection, auth, crypto |
@@ -66,6 +69,8 @@ Add `--quick` to any command for faster results with fewer Codex calls:
 
 ## Personas
 
+A **persona** controls *how* Codex reviews — it sets the reviewer's role, tone, and mindset. One persona per command.
+
 | Persona | Mindset |
 |---------|---------|
 | `senior-engineer` | Pragmatic, production-readiness focused |
@@ -74,7 +79,7 @@ Add `--quick` to any command for faster results with fewer Codex calls:
 | `junior-mentor` | Educational, explains principles |
 | `devil-advocate` | Contrarian, challenges every assumption |
 
-Profiles and personas compose: `--profile security-audit --persona devil-advocate`
+Profile + persona compose (one of each): `--profile security-audit --persona devil-advocate`
 
 Custom personas: create `.codex-personas.md` at project root.
 
