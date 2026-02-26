@@ -1,10 +1,11 @@
 {
   "name": "codex",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Cross-validate plans and code with OpenAI Codex CLI — pair review, plan validation, and adversarial debate with internet research",
   "author": {
     "name": "Oleksandr Kucherenko"
   },
   "keywords": ["codex", "review", "validation", "adversarial", "cross-validation"],
-  "commands": ["./commands"]
+  "commands": ["./commands"],
+  "hooks": "./hooks/hooks.json"
 }
