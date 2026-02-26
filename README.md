@@ -109,16 +109,17 @@ CRITICAL security/correctness findings can never be auto-dismissed.
 
 ## Installation
 
-From GitHub:
+Add the marketplace, then install the plugin (run inside Claude Code):
 
-```bash
-claude plugin add github:AlexTiTanium/codex-validation
+```
+/plugin marketplace add AlexTiTanium/codex-validation
+/plugin install codex@AlexTiTanium-codex-validation
 ```
 
-Or from a local clone:
+Or for local development, use the `--plugin-dir` flag:
 
 ```bash
-claude plugin add ./codex-validation
+claude --plugin-dir ./codex-validation
 ```
 
 ## Agent
